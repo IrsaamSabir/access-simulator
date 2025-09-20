@@ -16,7 +16,9 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path
+from core.views import SimulateAccessView
 
 urlpatterns = [
     path('admin/', admin.site.urls),
+    path("api/simulate/", SimulateAccessView.as_view()),
 ]
