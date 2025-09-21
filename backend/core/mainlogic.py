@@ -1,35 +1,59 @@
-from datetime import timedelta, datetime
+from datetime import datetime
 from core.models import Room, AccessLog
+
+
+def minutes_diff(t1, t2):
+    """Return difference in minutes between two time objects."""
+    dt1 = datetime.combine(datetime.today(), t1)
+    dt2 = datetime.combine(datetime.today(), t2)
+    return (dt1 - dt2).total_seconds() / 60.0
+
 
 def simulate_one(employee):
     emp_id = employee["id"]
     emp_level = employee["access_level"]
-    req_time = employee["request_time"]
+    req_time = employee["request_time"]  # datetime.time
     room_name = employee["room"]
 
     try:
         room = Room.objects.get(name=room_name)
     except Room.DoesNotExist:
-        return {emp_id: "Room not found"}
+        return {"id": emp_id, "status": "Denied", "reason": "Room not found"}
 
-    now_dt = datetime.combine(datetime.today(), req_time)
-
+    # Check access level
     if emp_level < room.min_access_level:
-        return {emp_id: "Access Denied: insufficient level"}
-    if not (room.open_time <= req_time <= room.close_time):
-        return {emp_id: "Access Denied: room closed"}
+        AccessLog.objects.create(emp_id=emp_id, room=room,
+                                 access_time=req_time, granted=False,
+                                 reason="Denied: Below required level")
+        return {"id": emp_id, "status": "Denied", "reason": "Denied: Below required level"}
 
-    last_log = AccessLog.objects.filter(employee_id=emp_id, room=room, granted=True).order_by("-access_time").first()
+    # Check room open/close (close_time exclusive)
+    if not (room.open_time <= req_time < room.close_time):
+        AccessLog.objects.create(emp_id=emp_id, room=room,
+                                 access_time=req_time, granted=False,
+                                 reason="Denied: Room closed")
+        return {"id": emp_id, "status": "Denied", "reason": "Denied: Room closed"}
+
+    # Check cooldown
+    last_log = (
+        AccessLog.objects.filter(emp_id=emp_id, room=room, granted=True)
+        .order_by("-created_at")
+        .first()
+    )
     if last_log:
-        cooldown = last_log.access_time + timedelta(minutes=room.cooldown_minutes)
-        if now_dt < cooldown:
-            return {emp_id: "Access Denied: cooldown active"}
+        diff = minutes_diff(req_time, last_log.access_time)
+        if diff < room.cooldown_minutes:
+            AccessLog.objects.create(emp_id=emp_id, room=room,
+                                     access_time=req_time, granted=False,
+                                     reason="Denied: Cooldown active")
+            return {"id": emp_id, "status": "Denied", "reason": "Denied: Cooldown active"}
 
-    AccessLog.objects.create(employee_id=emp_id, room=room, granted=True, reason="OK")
-    return {emp_id: "Access Granted"}
+    # Grant access
+    AccessLog.objects.create(emp_id=emp_id, room=room,
+                             access_time=req_time, granted=True,
+                             reason=f"Access granted to {room.name}")
+    return {"id": emp_id, "status": "Granted", "reason": f"Access granted to {room.name}"}
+
 
 def simulate_batch(employees):
-    results = {}
-    for e in employees:
-        results.update(simulate_one(e))
-    return results
+    return [simulate_one(e) for e in employees]
